@@ -1,0 +1,28 @@
+gestvmnew gvm
+
+gestvmload [grab gvm] sequence.rom
+
+
+phasor 2 0
+hold zz
+regset zz 0
+
+gestvmnode [grab gvm] [gestvmsym sequence.rom mel] [regget 0]
+gestvmeval [grab gvm] [gestvmsym sequence.rom init]
+
+mtof zz
+blsaw zz
+
+gestvmnode [grab gvm] [gestvmsym sequence.rom expr] [regget 0]
+gestvmeval [grab gvm] [gestvmsym sequence.rom expr-init]
+mul zz [expr 1.0 / 255]
+
+scale zz 300 800
+
+butlp zz zz
+
+unhold [regget 0]
+
+wavout zz sequence.wav
+
+computes 45

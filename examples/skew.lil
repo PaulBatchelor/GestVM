@@ -1,0 +1,33 @@
+gestvmnew gvm
+
+
+metro 60
+hold zz
+gestvmload [grab gvm] skew.rom
+
+phasor 2 0
+hold zz
+regset zz 0
+
+gestvmnode [grab gvm] [gestvmsym skew.rom mel] [regget 0]
+gestvmeval [grab gvm] [gestvmsym skew.rom init]
+
+mtof zz
+blsaw zz
+mul zz 0.5
+
+butlp zz 800
+
+# regget 0
+# phsclk zz 1
+# env zz 0.001 0.001 0.01
+# sine 1000 0.3
+# mul zz zz
+# add zz zz
+
+
+unhold [regget 0]
+
+wavout zz skew.wav
+
+computes 45

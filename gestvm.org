@@ -1,0 +1,1559 @@
+#+TITLE: GestVM
+* Introduction
+GestVM is a gesture synthesizer, sequenced and controlled
+via the [[https://wiki.xxiivv.com/site/uxn.html][Uxn virtual machine.]]
+
+What is referred to as a =Gesture= can be imagined as a
+virtual control voltage signal, intended to be used in
+a modular synthesis environment.
+* How To Read This Document
+This document is a literate program, meaning that
+both documentation and code are melted together in
+one format (in this case, an org file). With any luck,
+the words thrown around here will provide a coherent
+explanation for the overall program structure.
+
+This text is well suited for an audience that wishes
+to understand how GestVM the Program fundamentally works.
+Unfortunately, for those who want to learn how actually
+*use* GestVM, this may be the wrong place to start.
+Hopefully, some tutorials and example files have been
+included in the distribution.
+
+This document was written using the literate programming
+features in org-mode, and tangled to C code with a custom
+tangler. Emacs is a convenient way to browse this document
+as it folds everything up into sections. In an HTML version
+of this document, making use of the @!(ref "gestvm"
+"table of contents")!@ may be a helpful map.
+
+The structure of this document was written with the idea
+that it could be mostly read top to bottom. Some sections,
+such
+as @!(progref "Structs" "gestvm.org")!@ and @!(progref
+"Tangled Files" "gestvm.org")!@, are more code
+than words. These are necessary for the program, but do not
+need as much time.
+
+GestVM is largely a DSP algorithm. Reading
+through @!(progref "Signal Flow" "gestvm.org")!@ will
+provide a good overall
+understanding for how the program works. The computation
+of a sample can be found in @!(progref
+"Top-Level Computation" "gestvm.org")!@. Starting
+there at =gestvm_tick= and working
+downwards may be a fruitful path. Other sections will
+go through these in more detail.
+
+The key DSP algorithm used here is known as the =rephasor=,
+and this algorithm is implemented and explained
+in @!(progref "The General Rephasor Algorithm"
+"gestvm.org")!@. This algorithm
+comes from the Sndkit collection, where there is a more
+in-depth explanation.
+
+The interface to GestVM is via the Uxn virtual machine. This
+is all explained in @!(progref "Uxn Evaluator"
+"gestvm.org")!@. Note that
+an explanation of the Uxn VM itself is beyond the scope of
+this document.
+* Signal Flow
+** Overview
+GestVM can be imagined as a DSP algorithm whose state
+is controlled via a virtual machine that gets periodically
+evaluated. Understanding the signal flow is the recommended
+way to understand the system.
+
+GestVM can be broken up into components,
+which will be presented in flow order going from the inputs
+to the outputs.
+
+Examined as a unit generator, GestVM takes in one input
+signal, known as a =conductor=, and produces one output
+signal, known as a =gesture=.
+** Temporal Weight (pre-input)
+The tempo of the timing signal can be optionally
+influenced by the system it is controlling in a mechanism
+called =temporal weight=.
+
+Temporal weight is the means for adding tempo flucuations.
+In a typical DAW, tempo is controlled via a tempo automation
+track. This will cause the length of notes to vary depending
+region you drop them in. Temporal weight reverses this
+relationship. It is instead the notes themselves that can
+influence the tempo rather than the other way around.
+
+Temporal weight has two parameters: mass and inertia. As
+mass increases, overall tempo increases and things become
+faster. As mass decreases, overal tempo decreases and
+things become slower. Inertia sets how quickly the sytem
+will react to changes.
+** Conductor (input signal)
+The Conductor is a specialized timing signal used
+to control the gesture. It is expected to be a periodic
+rising ramp normalized to be in range 0 to 1. Ideally,
+wraparound should be truncated.
+
+This is generated externally and not managed by GestVM.
+The advantage of this is that this signal can be used to
+control other things in a system, thus keeping things
+synchronized.
+** Temporal Skewer
+Temporal skewing is a process that allows a section
+beats produced by the conductor to be warped locally without
+adding or removing any overall time.
+
+Skewing works by putting the conductor ramp through a
+process that makes it proportionally slower, putting that
+through some kind of slope function, then speeding it
+up again.
+
+Skewing has two main parameters: the skewing behavior type
+(such as bypass, exponential positive, exponential
+negative), and the duration (positive integer, minimum 1).
+** Main Rephasor
+Placed after the Skewer, the Rephasor is the
+component in charge of taking the input conductor signal
+and proportionally changing the tempo.
+
+The rephasor is parametrically controlled with 2 values: a
+numerator, and a denominator (positive integer values, at
+least 1).
+These produce a fraction which
+set the scaling amount for the rephasor. A value of 1/2
+(N=1, D=2) will produce a phasor at half speed. A value of
+3/1 (N=3, D=1) will produce a phasor three times as fast.
+** Virtual Machine
+The =Virtual Machine= is placed after the Rephasor, and is
+responsible for manipulating the state of the gesture
+synthesizer. Every time the Rephasor resets back to 0, it
+will make a call to the underlying machine, which will run
+until it reaches a breakpoint statement =BRK=.
+** Interpolator (output)
+The =interpolator= takes in a rephasor as input, and uses it
+to interplate between two values, the current value, and the
+next value. Current value is set implicitly. The VM only
+is able to set the next value. Every time the VM evaluates,
+the existing next value is stored as the current value.
+
+The way the value is interpolated is known as
+the =behavior=. Behaviors can include: linear, step,
+exponential, etc. The interpolator can also be configured
+to return things like the phasor signal itself, which allows
+the gesture to be used for more articulation and envelope
+purposes.
+
+Interpolator has 2 commands: set up the next value, and
+the behavior.
+* Tangled Files
+This document tangles to =gestvm.c= and =gestvm.h=. Defining
+=GESTVM_PRIV= will expose the structs. Named codeblocks,
+such as =typedefs=, =structs=, =funcdefs=, and =funcs=,
+get dynamically added to using the underlying literate
+programming system.
+
+#+NAME: gestvm.h
+#+BEGIN_SRC c :tangle gestvm.h
+#ifndef GESTVM_H
+#define GESTVM_H
+
+#ifndef SKFLT
+#define SKFLT float
+#endif
+
+<<typedefs>>
+
+#ifdef GESTVM_PRIV
+<<structs>>
+#endif
+
+<<funcdefs>>
+
+#endif
+#+END_SRC
+
+#+NAME: gestvm.c
+#+BEGIN_SRC c :tangle gestvm.c
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <math.h>
+#include "uxn.h"
+#define GESTVM_PRIV
+#include "gestvm.h"
+
+<<static_funcdefs>>
+<<uxn_halt>>
+<<funcs>>
+#+END_SRC
+* Structs
+The =rephasor_struct= (=gestvm_rephasor=) has the data
+required for a generic rephasor.
+
+The =main_struct= (=gestvm=) is the core data for an
+instance of gestvm.
+
+The =uxn_struct= contains an instance of =uxn= designed
+to communicate with =gestvm=.
+
+#+NAME: structs
+#+BEGIN_SRC c
+<<rephasor_struct>>
+<<main_struct>>
+<<uxn_struct>>
+#+END_SRC
+* Initialization
+The main struct is called =gestvm=.
+
+#+NAME: typedefs
+#+BEGIN_SRC c
+typedef struct gestvm gestvm;
+#+END_SRC
+
+#+NAME: main_struct
+#+BEGIN_SRC c
+struct gestvm {
+    <<gestvm>>
+};
+#+END_SRC
+
+It is initialized with =gestvm_init=. An instance
+of Uxn set up to work with gestvm is passed in.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+void gestvm_init(gestvm *gvm, gestvm_uxn *u);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+void gestvm_init(gestvm *gvm, gestvm_uxn *u)
+{
+    <<init>>
+}
+#+END_SRC
+
+The =gestvm_sizeof= function is required because gestvm
+is used opaquely.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+size_t gestvm_sizeof(void);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+size_t gestvm_sizeof(void)
+{
+    return sizeof(gestvm);
+}
+#+END_SRC
+* Top-Level Computation
+A single sample of audio is computed with =gestvm_tick=.
+It takes expects a =conductor=, a phasor signal used
+as clock signal, as input.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+SKFLT gestvm_tick(gestvm *gvm, SKFLT cnd);
+#+END_SRC
+
+The the pipeline is broken up into functions that
+are explained in the later sections. The order
+includes: skew, rephasor, VM, and interpolator.
+
+#+NAME: funcs
+#+BEGIN_SRC c
+SKFLT gestvm_tick(gestvm *gvm, SKFLT cnd)
+{
+    SKFLT out;
+
+    out = 0.0;
+
+    /* Skew! */
+
+    cnd = skewer_tick(gvm, cnd);
+
+    /* Main Rephasor! */
+
+    cnd = rephasor_tick(gvm, cnd);
+
+    /* VM process */
+
+    vm_tick(gvm, cnd);
+
+    /* Interpolate */
+
+    out = interpolate(gvm, cnd);
+
+    return out;
+}
+#+END_SRC
+* The General Rephasor Algorithm
+(*NOTE*: This section outlines the generalized rephasor. Not
+to be confused with the @!(progref "Main Rephasor"
+"gestvm.org")!@.)
+** Overview
+The flexible timing in GestVM is made possible via the
+rephasor algorithm.
+
+A =rephasor= creates a phasor signal that is rhythmically
+porportional to the input phasor signal.
+Auto-time correction is applied to prevent clock drift
+accumulation, at the cost of delay of 2 samples.
+
+#+NAME: typedefs
+#+BEGIN_SRC c
+typedef struct gestvm_rephasor gestvm_rephasor;
+#+END_SRC
+
+Copied from the sndkit rephasor implementation.
+
+The terseness of the symbols comes from a math notation
+from the original sndkit algorithm. They are outlined
+here below.
+
+#+NAME: rephasor_struct
+#+BEGIN_SRC c
+struct gestvm_rephasor {
+    SKFLT pr; /* rephasor */
+    SKFLT pc[2]; /* comparison phasor */
+    SKFLT pe[2]; /* external phasor */
+    SKFLT c; /* correction */
+    SKFLT s; /* scaling */
+    SKFLT si; /* scaling, inverted */
+
+    SKFLT ir; /* rephasor incrementor */
+    SKFLT ic; /* comparison rephasor */
+};
+#+END_SRC
+** Setting the scale
+The scaling parameter of the rephasor is set with
+=gestvm_rephasor_scale=.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+void gestvm_rephasor_scale(gestvm_rephasor *rp, SKFLT scale);
+#+END_SRC
+
+The scaling amount determines the rate of the
+new phasor relative to the old one. A value of 1.0 is
+no change, less than one is slower (eg: 0.5 is half speed),
+and greater than one is faster (2.0 is double speed).
+
+#+NAME: funcs
+#+BEGIN_SRC c
+void gestvm_rephasor_scale(gestvm_rephasor *rp, SKFLT scale)
+{
+    if (scale != rp->s) {
+        rp->s = scale;
+        rp->si = 1.0 / scale;
+    }
+}
+#+END_SRC
+** Initialization
+Initialized with =gestvm_rephasor_init=.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+void gestvm_rephasor_init(gestvm_rephasor *rp);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+void gestvm_rephasor_init(gestvm_rephasor *rp)
+{
+    rp->pr = 0;
+    rp->pc[0] = 0;
+    rp->pc[1] = 0;
+    rp->pe[0] = 0;
+    rp->pe[1] = 0;
+    rp->c = 1.0;
+    rp->s = 1.0;
+    rp->si = 1.0;
+
+    rp->ir = 0.0;
+    rp->ic = 0.0;
+}
+#+END_SRC
+** The Rephasor Algorithm
+A single sample of audio can be computed with
+=gestvm_rephasor_tick=. It expects an input phasor
+=ext=.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+SKFLT gestvm_rephasor_tick(gestvm_rephasor *rp, SKFLT ext);
+#+END_SRC
+
+The core rephasor implemented here is based on the one
+described in =sndkit= that uses auto-correction.
+
+The main principle of a rephasor is that a phasor can
+be reconstructed by measuring the rate of change of
+incoming phasor. Applying some scaling value to this
+rate of change will proportionally change the rate of
+the phasor.
+
+Left unchecked, a rephasor created using this method will
+drift out of phase with the original signal. This can be
+prevented by putting the rephasor through another rephasor,
+set to be the inverse scaling value. This, in theory,
+should reproduce the original phasor signal. This new
+rephasor value is compared with the orignal, and the
+measured difference is applied as correction in the
+next iteration.
+
+Due to the analysis step, a rephasor introduces one
+sample of delay. Both rephasors therefore introduce
+a total of 2 samples of delay. This is accounted for
+when computing the correction amount.
+
+The correction value is clamped to be between 2.0 and
+0.5. Anything out of these bounds is mostly likely an
+invalid value.
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static SKFLT phasor(SKFLT phs, SKFLT inc)
+{
+    phs += inc;
+
+    if (phs > 1.0) return 0;
+
+    return phs;
+}
+
+SKFLT gestvm_rephasor_tick(gestvm_rephasor *rp, SKFLT ext)
+{
+    SKFLT pr, pc;
+    SKFLT out;
+
+
+    /* delta function of \theta_e */
+    if (ext > rp->pe[0]) {
+        rp->ir = ext - rp->pe[0];
+    }
+
+    /* compute main rephasor \theta_r */
+    pr = phasor(rp->pr, rp->s * rp->ir * rp->c);
+
+    /* delta function of \theta_r */
+    if (pr > rp->pr) {
+        rp->ic = pr - rp->pr;
+    }
+
+    /* compute rephasor \theta_c */
+    pc = phasor(rp->pc[0], rp->si * rp->ic);
+
+    /* compute correction coefficient */
+    if (rp->pc[1] != 0) {
+        rp->c = rp->pe[1] / rp->pc[1];
+    }
+
+    /* clamping the correction */
+    if (rp->c > 2.0) rp->c = 2.0;
+    if (rp->c < 0.5) rp->c = 0.5;
+
+    out = pr;
+
+    /* update state */
+
+    rp->pr = pr;
+
+    rp->pc[1] = rp->pc[0];
+    rp->pc[0] = pc;
+
+    rp->pe[1] = rp->pe[0];
+    rp->pe[0] = ext;
+
+    return out;
+}
+#+END_SRC
+* Skewer
+** Overview
+A =skewer= specialized rephasor that applies temporal
+skewing. It can be computed with =skewer_tick=.
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+gestvm_rephasor skew;
+#+END_SRC
+** Compute Function
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static SKFLT skewer_tick(gestvm *gvm, SKFLT phs);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static SKFLT skewer_tick(gestvm *gvm, SKFLT phs)
+{
+    SKFLT out;
+
+    if (gvm->update_skewer) {
+        gvm->update_skewer = 0;
+
+        if (gvm->skewdur > 0) {
+            SKFLT scale;
+            scale = 1.0 / gvm->skewdur;
+            gestvm_rephasor_scale(&gvm->skew, scale);
+        }
+    }
+
+    out = gestvm_rephasor_tick(&gvm->skew, phs);
+
+    out = gvm->skewer(gvm, out);
+
+    return out;
+}
+#+END_SRC
+** Initialization
+When first initialized, this works as a pass-thru signal,
+which is a rephasor with a scale of 1.
+
+#+NAME: init
+#+BEGIN_SRC c
+gestvm_rephasor_init(&gvm->skew);
+gestvm_rephasor_scale(&gvm->skew, 1.0);
+#+END_SRC
+** Skewdur
+Since the Skewer only produces slower values, rephasor
+scaling values are always less than 1. This value is
+represented as an inverse value called =skewdur=.
+So, 1/2 scale would be 2, 1/3 would be 3, etc.
+Only positive integer values greater than 0 are used.
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+int skewdur;
+#+END_SRC
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->skewdur = 1;
+#+END_SRC
+
+Any time this integer value is changed, the Skewer
+rephasor scaling value is also updated (as the inverse).
+
+The integer value is also sent to the Main Rephasor scaling
+amount. It will scale the Main Rephasor's numerator value.
+This will invert the rephasor of the skewer.
+** Update Skewer Flag
+The =update_skewer= flag is set every time the VM changes
+the =skewdur= value is updated. This will tell the skewer
+to update the rephasor scaling value.
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->update_skewer = 0;
+#+END_SRC
+
+In Uxn, skewing behavior type is set via an id. These
+can be found in the callback =find_skewer=.
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static gestvm_behavior find_skewer(int id);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static gestvm_behavior find_skewer(int id)
+{
+    gestvm_behavior s;
+
+    s = s_passthru;
+
+    switch (id) {
+        case 0:
+            s = s_passthru;
+            break;
+        case 1:
+            s = s_exp_pos;
+            break;
+        case 2:
+            s = s_exp_neg;
+            break;
+        default:
+            break;
+    }
+
+    return s;
+}
+#+END_SRC
+** Skewing Behavior
+The actual "skewing" is done using a stateless function via
+a behavior callback called =skewer=.
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+gestvm_behavior skewer;
+#+END_SRC
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->skewer = s_passthru;
+#+END_SRC
+** Some Skewing Behavior Functions
+Pass-thru will disable any skewing. Exponential will apply
+either positive or negative exponential skewing. This
+is applied after the rephasor.
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static SKFLT s_passthru(gestvm *gvm, SKFLT a);
+static SKFLT s_exp_pos(gestvm *gvm, SKFLT a);
+static SKFLT s_exp_neg(gestvm *gvm, SKFLT a);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static SKFLT s_passthru(gestvm *gvm, SKFLT a)
+{
+    return a;
+}
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static SKFLT s_exp_pos(gestvm *gvm, SKFLT a)
+{
+    return (1.0 - exp(1.5*a)) / (1.0 - exp(1.5));
+}
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static SKFLT s_exp_neg(gestvm *gvm, SKFLT a)
+{
+    return (1.0 - exp(-1.5*a)) / (1.0 - exp(-1.5));
+}
+#+END_SRC
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+int update_skewer;
+#+END_SRC
+* Main Rephasor
+** Overview
+Rephasor whose scaling amount is represented as a rational
+number with a numerator and denominator.
+** Computation
+It is computed with =rephasor_tick=.
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static SKFLT rephasor_tick(gestvm *gvm, SKFLT phs);
+#+END_SRC
+
+The rephasor scaling value must be updated any time
+the numerator, denominator, or skewing duration is changed.
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static SKFLT rephasor_tick(gestvm *gvm, SKFLT phs)
+{
+    SKFLT out;
+
+    if (gvm->update_rephasor) {
+        SKFLT scale;
+        gvm->update_rephasor = 0;
+
+        if (gvm->den != 0) {
+            scale =
+                (SKFLT)(gvm->num * gvm->skewdur) /
+                (SKFLT)gvm->den;
+        } else scale = 1.0;
+
+        gestvm_rephasor_scale(&gvm->rephasor, scale);
+    }
+
+    out = gestvm_rephasor_tick(&gvm->rephasor, phs);
+    return out;
+}
+#+END_SRC
+** Rephasor Control
+#+NAME: gestvm
+#+BEGIN_SRC c
+gestvm_rephasor rephasor;
+int num, den;
+int update_rephasor;
+#+END_SRC
+
+#+NAME: init
+#+BEGIN_SRC c
+gestvm_rephasor_init(&gvm->rephasor);
+gestvm_rephasor_scale(&gvm->rephasor, 1.0);
+gvm->num = 1;
+gvm->den = 1;
+gvm->update_rephasor = 0;
+#+END_SRC
+* Uxn Evaluator
+** Overview
+The Uxn Evaluator in GestVM takes in an input phasor.
+When the phasor resets, it evaluates Uxn code until it hits
+a BRK statement.
+
+When a reset happens, the interpolator will set the next
+value to be the current value.
+
+Uxn will also evaluate at initialization.
+
+The Uxn VM requires a user-defined function for =uxn_halt=.
+The one below is a placeholder and currently doesn't do
+anything.
+
+#+NAME: uxn_halt
+#+BEGIN_SRC c
+int uxn_halt(Uxn *u, Uint8 error, char *name, int id)
+{
+    /* doing nothing for now */
+	return 0;
+}
+#+END_SRC
+** The Uxn Struct
+A little bit of cleverness is utlized to allow Uxn
+to see GestVM as a device. An instance of Uxn is wrapped
+inside of a special pointer called =gestvm_uxn=. Uxn is
+the first item, followed by a pointer to =gestvm=.
+
+When the GestVM uxn device is called, the instance of
+Uxn can be recast as a =gestvm_uxn= struct, and then
+have access to the instance of gestvm.
+
+The reason why gestvm is a pointer is to allow for
+multiple instances of gestvm to run inside a single
+Rom.
+
+#+NAME: typedefs
+#+BEGIN_SRC c
+typedef struct gestvm_uxn gestvm_uxn;
+#+END_SRC
+
+#+NAME: uxn_struct
+#+BEGIN_SRC c
+struct gestvm_uxn {
+    Uxn u;
+    gestvm *gvm;
+};
+#+END_SRC
+
+Initialize with =gestvm_uxn_init=.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+void gestvm_uxn_init(gestvm_uxn *u);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+void gestvm_uxn_init(gestvm_uxn *u)
+{
+    uxn_boot(&u->u);
+    u->gvm = NULL;
+
+    <<zero_out_devices>>
+    <<console_device>>
+    <<gestvm_device>>
+}
+#+END_SRC
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+size_t gestvm_uxn_sizeof(void);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+size_t gestvm_uxn_sizeof(void)
+{
+    return sizeof(gestvm_uxn);
+}
+#+END_SRC
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+void gestvm_uxn_set(gestvm_uxn *gu, gestvm *gvm);
+gestvm *gestvm_uxn_get(gestvm_uxn *gu);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+void gestvm_uxn_set(gestvm_uxn *gu, gestvm *gvm)
+{
+    gu->gvm = gvm;
+}
+
+gestvm *gestvm_uxn_get(gestvm_uxn *gu)
+{
+    return gu->gvm;
+}
+#+END_SRC
+** Storing the Instance of Uxn in GestVM
+It is fairly convenient to store a pointer to the
+current instance of Uxn.
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+gestvm_uxn *u;
+#+END_SRC
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->u = u;
+#+END_SRC
+** Loading a ROM
+The function =gestvm_load= will load a ROM file into Uxn.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+int gestvm_load(gestvm_uxn *gu, const char *rom);
+#+END_SRC
+
+This loader is based on the loader found in Uxn, and is
+modified to support a non-standard symbol table.
+
+Symbol tables start at the beginning of the file and have
+the magic word "SYM", followed by the table size. If the
+table does indeed exist, the loader will use the size
+to skip it and things behave as usual.
+
+#+NAME: funcs
+#+BEGIN_SRC c
+int gestvm_load(gestvm_uxn *gu, const char *rom)
+{
+	FILE *f;
+	int r;
+    Uxn *u;
+    char sym[3];
+
+	if (!(f = fopen(rom, "rb"))) return 1;
+
+    sym[0] = sym[1] = sym[2] = 0;
+
+    fread(sym, 1, 3, f);
+
+    if (sym[0] == 'S' && sym[1] == 'Y' && sym[2] == 'M') {
+        unsigned char b[2];
+        unsigned short sz;
+        b[0] = b[1] = 0;
+        fread(b, 1, 2, f);
+        sz = b[0] | (b[1] << 8);
+        fseek(f, sz, SEEK_CUR);
+
+    } else fseek(f, 0L, SEEK_SET);
+
+
+    u = &gu->u;
+
+	r = fread(u->ram.dat + PAGE_PROGRAM,
+              1, sizeof(u->ram.dat) - PAGE_PROGRAM, f);
+	fclose(f);
+	if(r < 1) return 1;
+	return 0;
+}
+#+END_SRC
+** Symbol Look-up
+GestVM ROMs can optionally use a non-standard symbol-lookup
+table that keeps a list of Uxn labels and their pointer
+address.
+
+Looking up a particular symbol in a ROM can be done with
+=gestvm_lookup=. On error, it will return 0. Otherwise
+it will return an address.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+unsigned int gestvm_lookup(const char *rom, const char *sym);
+#+END_SRC
+
+The symbol table is structured as a linear list and is
+stored at the beginning of the file. The header has the
+letters "SYM", followed by the table size (in bytes) as a
+16-bit word. Following this are the entries. An entry
+consists of the string size, the string itself, and the
+address.
+
+Symbol lookup is a linear operation that probes the list and
+attempts to find a matching string. Upon finding a match,
+the corresponding address is returned. (*Note*: while
+technically an Uxn address could be zero, this wouldn't
+practically happen because that would be in the zero page).
+
+*Note*: this function doesn't do granular error reporting.
+File not found, symbol not found, no symbol table, will all
+return 0.
+
+#+NAME: funcs
+#+BEGIN_SRC c
+unsigned int gestvm_lookup(const char *rom, const char *sym)
+{
+    unsigned char symlen;
+    unsigned short sz;
+    FILE *fp;
+    unsigned char buf[64];
+    unsigned int addr;
+
+    symlen = strlen(sym);
+    addr = 0;
+
+    fp = fopen(rom, "r");
+
+    if (fp == NULL) {
+        return 0;
+    }
+
+    memset(buf, 0, 64);
+
+    fread(buf, 1, 3, fp);
+
+    if (buf[0] != 'S' || buf[1] != 'Y' || buf[2] != 'M') {
+        return 0;
+    }
+
+    sz = 0;
+    fread(buf, 1, 2, fp);
+
+    sz = buf[0] + (buf[1] << 8);
+
+    while (sz) {
+        unsigned char len;
+        fread(&len, 1, 1, fp);
+
+        if (len == symlen) {
+            int i;
+            int match;
+            fread(buf, 1, len, fp);
+            match = 1;
+            for (i = 0; i < len; i++) {
+                if (buf[i] != sym[i]) {
+                    match = 0;
+                    break;
+                }
+            }
+
+            if (match) {
+                fread(buf, 1, 2, fp);
+                addr = buf[0] + (buf[1] << 8);
+                break;
+            } else {
+                fseek(fp, 2, SEEK_CUR);
+            }
+        } else {
+            fseek(fp, len + 2, SEEK_CUR);
+        }
+
+        sz -= (len + 2 + 1);
+    }
+
+    fclose(fp);
+
+    return addr;
+}
+#+END_SRC
+** Program Pointer
+In order for one ROM to support concurrent reads, each
+GestVM instance much have their own program pointer.
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+unsigned int ptr;
+#+END_SRC
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->ptr = 0;
+#+END_SRC
+
+The program pointer can be set with =gestvm_pointer=.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+void gestvm_pointer(gestvm *gvm, unsigned int ptr);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+void gestvm_pointer(gestvm *gvm, unsigned int ptr)
+{
+    gvm->ptr = ptr;
+}
+#+END_SRC
+** Device Callbacks
+Every virtual device in Uxn has a special callback.
+*** System Device Callbacks
+=nil_dei= and =nil_deo= are empty devices which
+Uxn is set to by default. These come from the uxncli
+program.
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static Uint8 nil_dei(Device *d, Uint8 port);
+static void nil_deo(Device *d, Uint8 port);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static void nil_deo(Device *d, Uint8 port)
+{
+	if(port == 0x1) d->vector = peek16(d->dat, 0x0);
+}
+
+static Uint8 nil_dei(Device *d, Uint8 port)
+{
+	return d->dat[port];
+}
+#+END_SRC
+
+#+NAME: zero_out_devices
+#+BEGIN_SRC c
+{
+    int i;
+
+    for (i = 0x0; i <= 0xf; i++) {
+        uxn_port(&u->u, i, nil_dei, nil_deo);
+    }
+}
+#+END_SRC
+
+The =console_deo= is useful way to print stuff to
+standard out (often it is used in a macro called =EMIT=
+in uxntal.) This too comes from the uxncli program.
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static void console_deo(Device *d, Uint8 port);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static void console_deo(Device *d, Uint8 port)
+{
+	if(port == 0x1)
+		d->vector = peek16(d->dat, 0x0);
+	if(port > 0x7)
+		write(port - 0x7, (char *)&d->dat[port], 1);
+}
+#+END_SRC
+
+#+NAME: console_device
+#+BEGIN_SRC c
+uxn_port(&u->u, 0x1, nil_dei, console_deo);
+#+END_SRC
+*** GestVM Device Callback
+The GestVM device callback is the means for which Uxn
+is able to communicate with GestVM. It is managed through
+the callback =gestvm_deo=.
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static void gestvm_deo(Device *d, Uint8 port);
+#+END_SRC
+
+Uxn can send an 8-bit unsigned byte to one of 16 ports.
+These ports are configured to configure the state of
+various aspects of the Gesture Synthesizer system.
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static void gestvm_deo(Device *d, Uint8 port)
+{
+    gestvm_uxn *gu;
+    gestvm *gvm;
+
+    gu = (gestvm_uxn *)d->u;
+    gvm = gu->gvm;
+
+    switch (port) {
+        <<port_commands>>
+        default:
+            break;
+    }
+}
+#+END_SRC
+
+#+NAME: gestvm_device
+#+BEGIN_SRC c
+uxn_port(&u->u, 0x2, nil_dei, gestvm_deo);
+#+END_SRC
+** Uxn Port Commands
+They are in order of signal flow.
+*** Weight Mass (0)
+#+NAME: port_commands
+#+BEGIN_SRC c
+case 0:
+    uxn_mass(gvm, d->dat[port]);
+    break;
+#+END_SRC
+*** Weight Inertia (1)
+#+NAME: port_commands
+#+BEGIN_SRC c
+case 1:
+    uxn_inertia(gvm, d->dat[port]);
+    break;
+#+END_SRC
+*** Skewer Type (2)
+#+NAME: port_commands
+#+BEGIN_SRC c
+case 2:
+    gvm->skewer = find_skewer(d->dat[port]);
+    break;
+#+END_SRC
+*** Skewer Length (3)
+#+NAME: port_commands
+#+BEGIN_SRC c
+case 3: {
+    int skewdur = d->dat[port];
+
+    if (skewdur > 0) {
+        gvm->skewdur = skewdur;
+        gvm->update_skewer = 1;
+        gvm->update_rephasor = 1;
+    }
+    break;
+}
+#+END_SRC
+*** Rephasor Numerator (4)
+#+NAME: port_commands
+#+BEGIN_SRC c
+case 4: {
+    int num;
+
+    num = d->dat[port];
+
+    if (num > 0 && num != gvm->num) {
+        gvm->num = num;
+        gvm->update_rephasor = 1;
+    }
+    break;
+}
+#+END_SRC
+*** Rephasor Denominator (5)
+#+NAME: port_commands
+#+BEGIN_SRC c
+case 5: {
+    int den;
+
+    den = d->dat[port];
+
+    if (den > 0 && den != gvm->den) {
+        gvm->den = den;
+        gvm->update_rephasor = 1;
+    }
+    break;
+}
+#+END_SRC
+*** Interpolator Next (6)
+#+NAME: port_commands
+#+BEGIN_SRC c
+case 6:
+    gvm->nxt = (SKFLT) d->dat[port];
+    break;
+#+END_SRC
+*** Interpolator Behavior (7)
+#+NAME: port_commands
+#+BEGIN_SRC c
+case 7:
+    gvm->behavior = find_behavior(d->dat[port]);
+    break;
+#+END_SRC
+** Tick
+#+NAME: gestvm
+#+BEGIN_SRC c
+SKFLT lphs;
+#+END_SRC
+
+Set to an arbitrarily high value so that the VM evaluates
+on startup.
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->lphs = 999;
+#+END_SRC
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static void vm_tick(gestvm *gvm, SKFLT phs);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static void vm_tick(gestvm *gvm, SKFLT phs)
+{
+    if (phs < gvm->lphs) {
+        gvm->u->gvm = gvm;
+        gvm->cur = gvm->nxt;
+        uxn_eval(&gvm->u->u, gvm->ptr);
+        gvm->ptr = gvm->u->u.ram.ptr;
+    }
+
+    gvm->lphs = phs;
+}
+#+END_SRC
+** Eval
+=gestvm_eval= wraps a call to =uxn_eval=.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+void gestvm_eval(gestvm_uxn *gu, unsigned int addr);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+void gestvm_eval(gestvm_uxn *gu, unsigned int addr)
+{
+    uxn_eval(&gu->u, addr);
+}
+#+END_SRC
+* Interpolator
+Interpolates between two values given an input signal.
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+SKFLT cur, nxt;
+#+END_SRC
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->cur = 0;
+gvm->nxt = 0;
+#+END_SRC
+
+The method of interpolation is known as behavior.
+
+#+NAME: typedefs
+#+BEGIN_SRC c
+typedef SKFLT (*gestvm_behavior)(gestvm *, SKFLT);
+#+END_SRC
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+gestvm_behavior behavior;
+#+END_SRC
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->behavior = b_linear;
+#+END_SRC
+
+Some behaviors include linear, step, and glissando.
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static SKFLT b_linear(gestvm *gvm, SKFLT a);
+static SKFLT b_step(gestvm *gvm, SKFLT a);
+static SKFLT b_gliss_medium(gestvm *gvm, SKFLT a);
+static SKFLT b_gliss(gestvm *gvm, SKFLT a);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static SKFLT b_linear(gestvm *gvm, SKFLT a)
+{
+    return a;
+}
+
+static SKFLT b_step(gestvm *gvm, SKFLT a)
+{
+    return 0;
+}
+
+static SKFLT b_gliss_medium(gestvm *gvm, SKFLT a)
+{
+    if (a < 0.75) {
+        a = 0;
+    } else {
+        a -= 0.75;
+        if (a < 0) a = 0;
+        a /= 0.25;
+        a = a * a * a;
+    }
+    return a;
+}
+
+static SKFLT b_gliss(gestvm *gvm, SKFLT a)
+{
+    if (a < 0.25) {
+        a = 0;
+    } else {
+        a -= 0.25;
+        if (a < 0) a = 0;
+        a /= 0.75;
+        a = a * a * a;
+    }
+
+    return a;
+}
+#+END_SRC
+
+Some behaviors, such as exponential with variable slope,
+will require arguments. More thought required here. Maybe
+aux values that get tied to cur/nxt?
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static SKFLT interpolate(gestvm *gvm, SKFLT phs);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static SKFLT interpolate(gestvm *gvm, SKFLT phs)
+{
+    SKFLT a;
+    a = gvm->behavior(gvm, phs);
+
+    return (1.0 - a)*gvm->cur + a*gvm->nxt;
+}
+#+END_SRC
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static gestvm_behavior find_behavior(int id);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static gestvm_behavior find_behavior(int id)
+{
+    gestvm_behavior b;
+
+    b = b_linear;
+
+    switch (id) {
+        case 0:
+            b = b_linear;
+            break;
+        case 1:
+            b = b_step;
+            break;
+        case 2:
+            b = b_gliss_medium;
+            break;
+        case 3:
+            b = b_gliss;
+            break;
+        default:
+            break;
+    }
+
+    return b;
+}
+#+END_SRC
+* Weight
+** Overview
+This is an optional signal generator used to influence
+parameters in the external conductor signal. This
+is known as temporal weight.
+** Weight and Mass
+Weight has two parameters: mass, and inertia. =Mass=
+determines how much to warp the tempo. Postive values
+indicate a faster tempo. Negative values indicate
+a slower tempo. Zero is neutral. The inertia value
+determines the overal responsiveness to the temporal
+weight changes.
+
+Ranges are TBD. In Gest, mass had a range of (-120,120),
+and could be scaled to some arbirtrary amount (120 was
+chosen for it's division properties). Inertia was usually
+in tau units for a smoothing filter.
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+SKFLT inertia;
+SKFLT mass;
+#+END_SRC
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->mass = 0;
+gvm->inertia = 0;
+#+END_SRC
+** Weight DSP algorithm
+The weight signal can be implemented as a control signal
+with adjustable range, put through a 1-pole smoothing
+filter.
+
+This will be called =gestvm_weight=.
+
+#+NAME: typedefs
+#+BEGIN_SRC c
+typedef struct gestvm_weight gestvm_weight;
+#+END_SRC
+
+#+NAME: structs
+#+BEGIN_SRC c
+struct gestvm_weight {
+    gestvm *gvm;
+    int sr;
+    SKFLT a;
+    SKFLT inertia;
+    SKFLT prev;
+    SKFLT scale;
+    SKFLT ampneg;
+    SKFLT amppos;
+};
+#+END_SRC
+
+Since it is used opaquely, the size is returned via
+=gestvm_weight_sizeof=.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+size_t gestvm_weight_sizeof(void);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+size_t gestvm_weight_sizeof(void)
+{
+    return sizeof(gestvm_weight);
+}
+#+END_SRC
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+void gestvm_weight_init(gestvm_weight *gw, gestvm *gvm, int sr);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+void gestvm_weight_init(gestvm_weight *gw, gestvm *gvm, int sr)
+{
+    gw->sr = sr;
+    gw->gvm = gvm;
+    gw->prev = 0;
+    gw->a = 0.0;
+    gw->scale = 1.0 / 120;
+    gestvm_weight_amppos(gw, 20);
+    gestvm_weight_ampneg(gw, 20);
+}
+#+END_SRC
+
+Weight will scale differently depending on if it is negative
+or postive. These are set with =gestvm_weight_amppos= and
+=gestvm_weight_ampneg=.
+
+*NOTE*: a negative amp is stored as a positive value, but
+will end up being negative.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+void gestvm_weight_amppos(gestvm_weight *gw, SKFLT amp);
+void gestvm_weight_ampneg(gestvm_weight *gw, SKFLT amp);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+void gestvm_weight_amppos(gestvm_weight *gw, SKFLT amp)
+{
+    gw->amppos = amp;
+}
+
+void gestvm_weight_ampneg(gestvm_weight *gw, SKFLT amp)
+{
+    gw->ampneg = amp;
+}
+#+END_SRC
+
+A sample of audio is computed with =gestvm_weight_tick=.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+SKFLT gestvm_weight_tick(gestvm_weight *gw);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+SKFLT gestvm_weight_tick(gestvm_weight *gw)
+{
+    SKFLT i;
+    SKFLT mass;
+    gestvm *gvm;
+    SKFLT out;
+
+    gvm = gw->gvm;
+
+    mass = gvm->mass;
+    i = gvm->inertia;
+
+    if (i != gw->inertia) {
+        gw->inertia = i;
+        if (i == 0) {
+            gw->a = 0;
+            gw->prev = 0;
+        } else {
+            gw->a = exp(-1.0 / (gw->sr * i));
+        }
+    }
+
+
+    out =
+        (1 - gw->a) * mass * gw->scale +
+        gw->a * gw->prev;
+
+    if (out > 1) out = 1;
+    if (out < -1) out = -1;
+
+    gw->prev = out;
+
+    if (out >= 0) {
+        out *= gw->amppos;
+    } else {
+        out *= gw->ampneg;
+    }
+
+    return out;
+}
+#+END_SRC
+** Setting mass/inertia from Uxn
+Since Uxn can only communicate with 8 bit values,
+some scaling has to be done to make meaningful
+weight values.
+
+For weight, the range of 0x00-0xff will represent -120,120.
+
+A value of 0x7f will be a neutral (0) value.
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static void uxn_mass(gestvm *gvm, unsigned char val);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static void uxn_mass(gestvm *gvm, unsigned char val)
+{
+    SKFLT m;
+    val &= 0xFF;
+
+    m = (SKFLT)(val - 0x7F) / 0x7F;
+    m *= 120.0;
+
+    if (m < -120) m = -120;
+    if (m > 120) m = 120;
+
+    gvm->mass = m;
+}
+#+END_SRC
+
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static void uxn_inertia(gestvm *gvm, unsigned char val);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static void uxn_inertia(gestvm *gvm, unsigned char val)
+{
+    SKFLT i;
+    val &= 0xFF;
+
+    i = (SKFLT)val / 0xFF;
+    i *= 0.3;
+
+    gvm->inertia = i;
+}
+#+END_SRC

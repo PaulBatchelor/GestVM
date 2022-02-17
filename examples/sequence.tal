@@ -1,0 +1,85 @@
+%NUM { #24 DEO }
+%DEN { #25 DEO }
+%NEXT { #26 DEO }
+%NOTE { #3c ADD NEXT }
+%BHVR { #27 DEO }
+%EMIT { #18 DEO }
+
+|0100
+
+@dur 02
+@mode 00
+
+@init
+#00 NOTE
+;dur LDA NUM #01 DEN
+#02 BHVR
+BRK
+
+@mel
+#05 NOTE #01 DEN #02 BHVR BRK
+#0a NOTE BRK
+#07 NOTE BRK
+#03 NOTE BRK
+#08 NOTE BRK
+#00 NOTE #03 DEN #00 BHVR BRK
+
+;dur LDA
+;mode LDA #01 NEQ ;&increase JCN2
+#01 SUB ;&check-lower JMP2
+&increase
+#01 ADD
+
+&check-lower
+DUP #02 GTH ;&check-upper JCN2
+#00 ;mode STA POP #02
+
+&check-upper
+DUP #40 LTH ;&skip JCN2
+#01 ;mode STA POP #40
+
+&skip
+DUP ;dur STA NUM
+;mel JMP2
+
+@expr-init
+#00 NEXT
+#01 NUM #04 DEN
+#00 BHVR
+BRK
+
+@expr
+#ff NEXT BRK
+#00 NEXT BRK
+;expr JMP2
+
+( sndkit patch
+gestvmnew gvm
+
+gestvmload [grab gvm] test.rom
+
+
+phasor 2 0
+hold zz
+regset zz 0
+
+gestvmnode [grab gvm] [gestvmsym test.rom mel] [regget 0]
+gestvmeval [grab gvm] [gestvmsym test.rom init]
+
+mtof zz
+blsaw zz
+
+gestvmnode [grab gvm] [gestvmsym test.rom expr] [regget 0]
+gestvmeval [grab gvm] [gestvmsym test.rom expr-init]
+mul zz [expr 1.0 / 255]
+
+scale zz 300 800
+
+butlp zz zz
+
+unhold [regget 0]
+
+wavout zz test.wav
+
+computes 45
+)

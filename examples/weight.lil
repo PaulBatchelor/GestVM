@@ -1,0 +1,51 @@
+gestvmnew gvm
+
+gestvmload [grab gvm] weight.rom
+
+hold [prev]
+regset zz 1
+
+regget 1
+add zz 2
+phasor zz 0
+
+hold zz
+regset zz 0
+
+gestvmnode [grab gvm] [gestvmsym weight.rom mel] [regget 0]
+gestvmweight [grab gvm] 1.2 2
+cabclr [regget 1]
+mix zz [regget 1] 1.0
+gestvmeval [grab gvm] [gestvmsym weight.rom init]
+
+sine 6.5 0.4
+gestvmweight [grab gvm] 1 1
+smoother zz 0.01
+biscale zz 1 0.1
+mul zz zz
+add zz zz
+
+mtof zz
+blsaw zz
+mul zz 0.5
+
+gestvmweight [grab gvm] 1 1
+smoother zz 0.1
+biscale zz 2000 500
+butlp zz zz
+butlp zz 4000
+
+dup
+dup
+verbity zz zz 0.1 0.1 0.1
+drop
+mul zz [dblin -15]
+dcblocker zz
+add zz zz
+
+unhold [regget 0]
+unhold [regget 1]
+
+wavout zz weight.wav
+
+computes 10

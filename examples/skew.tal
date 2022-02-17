@@ -1,0 +1,52 @@
+%NUM { #24 DEO }
+%DEN { #25 DEO }
+%NEXT { #26 DEO }
+%NOTE { #3a ADD NEXT }
+%BHVR { #27 DEO }
+%SKDR { #23 DEO }
+%SKTY { #22 DEO }
+
+|0100
+
+@init
+#0b NOTE
+#02 NUM #01 DEN
+#02 BHVR
+#09 SKDR
+#01 SKTY
+BRK
+
+@mel
+#0c NOTE BRK
+#08 NOTE BRK
+#0b NOTE BRK
+#09 NOTE BRK
+#08 NOTE BRK
+#0b NOTE BRK
+;mel JMP2
+
+( sndkit patch
+
+gestvmnew gvm
+
+gestvmload [grab gvm] skew.rom
+
+phasor 2 0
+hold zz
+regset zz 0
+
+gestvmnode [grab gvm] [gestvmsym skew.rom mel] [regget 0]
+gestvmeval [grab gvm] [gestvmsym skew.rom init]
+
+mtof zz
+blsaw zz
+mul zz 0.5
+
+butlp zz 800
+
+unhold [regget 0]
+
+wavout zz skew.wav
+
+computes 45
+)
