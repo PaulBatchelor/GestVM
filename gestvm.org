@@ -1222,7 +1222,7 @@ gvm->cur = 0;
 gvm->nxt = 0;
 #+END_SRC
 
-The method of interpolation is known as behavior.
+The method of interpolation is known as a =behavior=.
 
 #+NAME: typedefs
 #+BEGIN_SRC c
@@ -1557,3 +1557,14 @@ static void uxn_inertia(gestvm *gvm, unsigned char val)
     gvm->inertia = i;
 }
 #+END_SRC
+* TODO Gates
+Gates are signals that have two states: on or off. They
+can be very useful timing signals for things like envelope
+generators. To make these signals, a few new additions need
+to be introduced into the existing GestVM system.
+
+Relative vs absolute gates.
+
+Bypassing the interpolator.
+
+Counter. Needed for asbolute gates.
