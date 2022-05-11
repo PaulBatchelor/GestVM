@@ -7,7 +7,7 @@
 #include "sndkit/lil/lil.h"
 #include "sndkit/nodes/sklil.h"
 
-#include "uxn.h"
+#include "uxn/uxn.h"
 #include "gestvm.h"
 
 static void delgestvm(void *ptr)

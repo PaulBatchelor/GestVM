@@ -447,7 +447,7 @@ write_symtab(FILE *fp)
 }
 
 int
-main(int argc, char *argv[])
+uxnasm_main(int argc, char *argv[])
 {
 	FILE *src, *dst;
     int symtab;
@@ -478,3 +478,11 @@ main(int argc, char *argv[])
 	review(argv[2]);
 	return 0;
 }
+
+#ifndef NO_UXNASM_MAIN
+int
+main(int argc, char *argv[])
+{
+    return uxnasm_main(argc, argv);
+}
+#endif

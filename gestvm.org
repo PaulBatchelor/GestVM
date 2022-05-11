@@ -179,7 +179,7 @@ programming system.
 #include <string.h>
 #include <unistd.h>
 #include <math.h>
-#include "uxn.h"
+#include "uxn/uxn.h"
 #define GESTVM_PRIV
 #include "gestvm.h"
 

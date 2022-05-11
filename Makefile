@@ -1,6 +1,6 @@
 default: gestvm uxnasm
 
-CFLAGS= -Wall -pedantic -O3 -Iuxn -g
+CFLAGS= -Wall -pedantic -O3 -g
 OBJ= gestvm.o main.o uxn/uxn.o l_gestvm.o
 LIBS= -lsndkit
 WORGLE=
