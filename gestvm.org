@@ -1559,12 +1559,31 @@ static void uxn_inertia(gestvm *gvm, unsigned char val)
 #+END_SRC
 * TODO Gates
 Gates are signals that have two states: on or off. They
-can be very useful timing signals for things like envelope
-generators. To make these signals, a few new additions need
-to be introduced into the existing GestVM system.
+tend to be used to control things like envelope generators.
+In order to create a gate, a few new additions need
+to be introduced into the existing GestVM system. In
+particular, a means for keeping track of time (for absolute
+gates), and a way to bypass the interpolator and return
+generated ramps with behaviors.
 
-Relative vs absolute gates.
+Gates are implemented as kind of behavior, of which
+there are two kinds: relative and absolute. A relative
+gate defines the length of the on state relative to
+the length of the current ramp period. For example, a 25%
+gate would produce a gate that was on for only 25 percent
+of the time. An absolute gate defines the on-time of
+a gate in absolute time, in seconds or milliseconds.
 
-Bypassing the interpolator.
+Typically, behaviors are intermediate signals used to
+interpolate between two values. Gate signals require that
+behavior signals be returned instead of the interpolated
+signal. This is done by defining a flag that bypasses the
+interpolation stage of the Gesture signal generator and
+returns the behavior instead.
 
-Counter. Needed for asbolute gates.
+In order to produce absolute gates, GestVM needs to have
+some sense of time. In a DSP context, the past of least
+resistance is to use sample-accurate timing with a counter.
+Such a system would be able to set a counter to a unit in
+milliseconds or seconds, which is internally converted
+to samples. The counter could then count down to 0.
