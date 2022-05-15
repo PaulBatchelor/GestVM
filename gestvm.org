@@ -285,7 +285,8 @@ SKFLT gestvm_tick(gestvm *gvm, SKFLT cnd)
 
     /* Interpolate */
 
-    out = interpolate(gvm, cnd);
+    if (gvm->interp) out = interpolate(gvm, cnd);
+    else out = cnd;
 
     return out;
 }
@@ -1160,6 +1161,18 @@ case 7:
     gvm->behavior = find_behavior(d->dat[port]);
     break;
 #+END_SRC
+*** Set Counter (8)
+#+BEGIN_SRC c
+case 8:
+    gestvm_counter_set(gvm, d->dat[port]);
+    break;
+#+END_SRC
+*** Enable/Disable Interpolator (9)
+#+BEGIN_SRC c
+case 9:
+    gvm->interp = d->dat[port];
+    break;
+#+END_SRC
 ** Tick
 #+NAME: gestvm
 #+BEGIN_SRC c
@@ -1334,6 +1347,18 @@ static gestvm_behavior find_behavior(int id)
             break;
         case 3:
             b = b_gliss;
+            break;
+        case 4:
+            b = b_gate_rel_125;
+            break;
+        case 5:
+            b = b_gate_rel_25;
+            break;
+        case 6:
+            b = b_gate_rel_50;
+            break;
+        case 7:
+            b = b_gate_abs;
             break;
         default:
             break;
@@ -1557,29 +1582,77 @@ static void uxn_inertia(gestvm *gvm, unsigned char val)
     gvm->inertia = i;
 }
 #+END_SRC
-* TODO Gates
+* Gates
 Gates are signals that have two states: on or off. They
 tend to be used to control things like envelope generators.
 In order to create a gate, a few new additions need
 to be introduced into the existing GestVM system. In
-particular, a means for keeping track of time (for absolute
-gates), and a way to bypass the interpolator and return
-generated ramps with behaviors.
+particular, there needs to be a way to keep
+track of time (for absolute
+gates), and a way to bypass the interpolator, so that
+behaviors can be returned instead.
 
-Gates are implemented as kind of behavior, of which
-there are two kinds: relative and absolute. A relative
-gate defines the length of the on state relative to
-the length of the current ramp period. For example, a 25%
+Gates are implemented as kind of behavior.
+There are two kinds of a gates: relative and absolute.
+A relative gate defines the length of the on state
+relative to the length of the current ramp period.
+For example, a 25%
 gate would produce a gate that was on for only 25 percent
 of the time. An absolute gate defines the on-time of
 a gate in absolute time, in seconds or milliseconds.
 
+#+NAME: static_funcdefs
+#+BEGIN_SRC c
+static SKFLT b_gate_rel_25(gestvm *gvm, SKFLT a);
+static SKFLT b_gate_rel_50(gestvm *gvm, SKFLT a);
+static SKFLT b_gate_rel_125(gestvm *gvm, SKFLT a);
+static SKFLT b_gate_abs(gestvm *gvm, SKFLT a);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+static SKFLT b_gate_rel_25(gestvm *gvm, SKFLT a)
+{
+    return a >= 0.25;
+}
+
+static SKFLT b_gate_rel_50(gestvm *gvm, SKFLT a)
+{
+    return a >= 0.5;
+}
+
+static SKFLT b_gate_rel_125(gestvm *gvm, SKFLT a)
+{
+    return a >= 0.125;
+}
+
+static SKFLT b_gate_abs(gestvm *gvm, SKFLT a)
+{
+    if (gvm->counter > 0) {
+        gvm->counter--;
+        return 1.0;
+    }
+
+    return 0.0;
+}
+#+END_SRC
+
 Typically, behaviors are intermediate signals used to
 interpolate between two values. Gate signals require that
-behavior signals be returned instead of the interpolated
-signal. This is done by defining a flag that bypasses the
-interpolation stage of the Gesture signal generator and
-returns the behavior instead.
+these behavior signals be returned instead of the
+interpolated signal. This is done by defining a flag
+that bypasses the interpolation stage of the
+Gesture signal generator and returns the behavior instead.
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+int interp;
+#+END_SRC
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->interp = 1;
+#+END_SRC
 
 In order to produce absolute gates, GestVM needs to have
 some sense of time. In a DSP context, the past of least
@@ -1587,3 +1660,63 @@ resistance is to use sample-accurate timing with a counter.
 Such a system would be able to set a counter to a unit in
 milliseconds or seconds, which is internally converted
 to samples. The counter could then count down to 0.
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+unsigned long counter;
+#+END_SRC
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->counter = 0;
+#+END_SRC
+
+The counter is intended to be set in units
+of milliseconds. This makes it sample-rate independent.
+Milliseconds are an ideal unit, as they are the best
+fit for the order of durations usually considered while
+also making use of the 16-bit integer values of the UXN
+VM.
+
+The conversion from millesconds will happen implicitely.
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+void gestvm_counter_set(gestvm *gvm, unsigned int ms);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+void gestvm_counter_set(gestvm *gvm, unsigned int ms)
+{
+    gvm->counter = ms * gvm->ms2samps;
+}
+#+END_SRC
+
+In order to convert from milliseconds to samples, a
+multiplier scalar value is used. By default this is set to
+be 1. When the function =gestvm_sr_set=, it will set the
+constant.
+
+#+NAME: gestvm
+#+BEGIN_SRC c
+SKFLT ms2samps;
+#+END_SRC
+
+#+NAME: init
+#+BEGIN_SRC c
+gvm->ms2samps = 1;
+#+END_SRC
+
+#+NAME: funcdefs
+#+BEGIN_SRC c
+void gestvm_sr_set(gestvm *gvm, int sr);
+#+END_SRC
+
+#+NAME: funcs
+#+BEGIN_SRC c
+void gestvm_sr_set(gestvm *gvm, int sr)
+{
+    gvm->ms2samps = 1000.0 * sr;
+}
+#+END_SRC
