@@ -1689,7 +1689,7 @@ void gestvm_counter_set(gestvm *gvm, unsigned int ms);
 #+BEGIN_SRC c
 void gestvm_counter_set(gestvm *gvm, unsigned int ms)
 {
-    gvm->counter = ms * gvm->ms2samps;
+    gvm->counter = floor(ms * gvm->ms2samps);
 }
 #+END_SRC
 
