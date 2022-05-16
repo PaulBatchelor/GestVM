@@ -1222,7 +1222,9 @@ void gestvm_eval(gestvm_uxn *gu, unsigned int addr)
 }
 #+END_SRC
 * Interpolator
-Interpolates between two values given an input signal.
+** Overview
+The Interpolator interpolates between two values given
+an input signal in range 0 to 1.
 
 #+NAME: gestvm
 #+BEGIN_SRC c
@@ -1251,7 +1253,7 @@ gestvm_behavior behavior;
 #+BEGIN_SRC c
 gvm->behavior = b_linear;
 #+END_SRC
-
+** Some Behaviors
 Some behaviors include linear, step, and glissando.
 
 #+NAME: static_funcdefs
@@ -1321,7 +1323,7 @@ static SKFLT interpolate(gestvm *gvm, SKFLT phs)
     return (1.0 - a)*gvm->cur + a*gvm->nxt;
 }
 #+END_SRC
-
+** Find Behavior
 #+NAME: static_funcdefs
 #+BEGIN_SRC c
 static gestvm_behavior find_behavior(int id);
