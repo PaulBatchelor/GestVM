@@ -1,0 +1,20 @@
+gestvmnew gvm
+
+gestvmload [grab gvm] gate.rom
+
+phasor 2 0
+hold zz
+regset zz 0
+
+gestvmnode [grab gvm] [gestvmsym gate.rom mel] [regget 0]
+gestvmeval [grab gvm] [gestvmsym gate.rom init]
+
+smoother zz 0.001
+sine 800 0.5
+mul zz zz
+
+wavout zz "gate.wav"
+
+computes 10
+
+unhold [regget 0]

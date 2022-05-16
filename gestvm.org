@@ -1162,12 +1162,14 @@ case 7:
     break;
 #+END_SRC
 *** Set Counter (8)
+#+NAME: port_commands
 #+BEGIN_SRC c
 case 8:
     gestvm_counter_set(gvm, d->dat[port]);
     break;
 #+END_SRC
 *** Enable/Disable Interpolator (9)
+#+NAME: port_commands
 #+BEGIN_SRC c
 case 9:
     gvm->interp = d->dat[port];
