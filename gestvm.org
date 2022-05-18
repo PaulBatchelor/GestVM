@@ -285,8 +285,7 @@ SKFLT gestvm_tick(gestvm *gvm, SKFLT cnd)
 
     /* Interpolate */
 
-    if (gvm->interp) out = interpolate(gvm, cnd);
-    else out = cnd;
+    out = interpolate(gvm, cnd);
 
     return out;
 }
@@ -1161,17 +1160,32 @@ case 7:
     gvm->behavior = find_behavior(d->dat[port]);
     break;
 #+END_SRC
-*** Set Counter (8)
+*** Set Counter (8, with 9 reserved)
+The counter takes up 2 ports. This is done so the counter
+can support both 8-bit and 16-bit values using =DEO=
+and =DEO2=, respectively. Both can use port 8 and should
+behave as expected.
+
+Uxn processes 16-bit values with
+DEO2 by splitting it into 2 8-bit values and writing them
+to neighboring ports in sequence. The MSB (port 8) gets
+written first, followed by the LSB (port 9). GestVM
+will store the previous value, and will use that
+to set the correct timing value.
+
 #+NAME: port_commands
 #+BEGIN_SRC c
 case 8:
     gestvm_counter_set(gvm, d->dat[port]);
     break;
+case 9:
+    gestvm_counter_set(gvm, (gvm->ms << 8) | d->dat[port]);
+    break;
 #+END_SRC
-*** Enable/Disable Interpolator (9)
+*** Enable/Disable Interpolator (10)
 #+NAME: port_commands
 #+BEGIN_SRC c
-case 9:
+case 10:
     gvm->interp = d->dat[port];
     break;
 #+END_SRC
@@ -1309,7 +1323,7 @@ static SKFLT b_gliss(gestvm *gvm, SKFLT a)
 Some behaviors, such as exponential with variable slope,
 will require arguments. More thought required here. Maybe
 aux values that get tied to cur/nxt?
-
+** Main Function
 #+NAME: static_funcdefs
 #+BEGIN_SRC c
 static SKFLT interpolate(gestvm *gvm, SKFLT phs);
@@ -1322,7 +1336,9 @@ static SKFLT interpolate(gestvm *gvm, SKFLT phs)
     SKFLT a;
     a = gvm->behavior(gvm, phs);
 
-    return (1.0 - a)*gvm->cur + a*gvm->nxt;
+    if (gvm->interp)
+        return (1.0 - a)*gvm->cur + a*gvm->nxt;
+    return a;
 }
 #+END_SRC
 ** Find Behavior
@@ -1617,17 +1633,17 @@ static SKFLT b_gate_abs(gestvm *gvm, SKFLT a);
 #+BEGIN_SRC c
 static SKFLT b_gate_rel_25(gestvm *gvm, SKFLT a)
 {
-    return a >= 0.25;
+    return a <= 0.25;
 }
 
 static SKFLT b_gate_rel_50(gestvm *gvm, SKFLT a)
 {
-    return a >= 0.5;
+    return a <= 0.5;
 }
 
 static SKFLT b_gate_rel_125(gestvm *gvm, SKFLT a)
 {
-    return a >= 0.125;
+    return a <= 0.125;
 }
 
 static SKFLT b_gate_abs(gestvm *gvm, SKFLT a)
@@ -1665,14 +1681,19 @@ Such a system would be able to set a counter to a unit in
 milliseconds or seconds, which is internally converted
 to samples. The counter could then count down to 0.
 
+The =ms= value is cached for Uxn incase a 16-byte value
+is used with DEO2, which processes in 2 write operations.
+
 #+NAME: gestvm
 #+BEGIN_SRC c
 unsigned long counter;
+unsigned long ms;
 #+END_SRC
 
 #+NAME: init
 #+BEGIN_SRC c
 gvm->counter = 0;
+gvm->ms = 0;
 #+END_SRC
 
 The counter is intended to be set in units
@@ -1694,6 +1715,7 @@ void gestvm_counter_set(gestvm *gvm, unsigned int ms);
 void gestvm_counter_set(gestvm *gvm, unsigned int ms)
 {
     gvm->counter = floor(ms * gvm->ms2samps);
+    gvm->ms = ms;
 }
 #+END_SRC
 
@@ -1721,6 +1743,6 @@ void gestvm_sr_set(gestvm *gvm, int sr);
 #+BEGIN_SRC c
 void gestvm_sr_set(gestvm *gvm, int sr)
 {
-    gvm->ms2samps = 1000.0 * sr;
+    gvm->ms2samps = sr / 1000.0;
 }
 #+END_SRC
